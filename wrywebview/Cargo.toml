@@ -14,6 +14,14 @@ thiserror = "2.0.11"
 uniffi = "0.29.4"
 wry = "0.53.5"
 
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+incremental = false
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
 glib = "0.18"

@@ -1,4 +1,5 @@
 import gobley.gradle.GobleyHost
+import gobley.gradle.Variant
 import gobley.gradle.cargo.dsl.jvm
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -11,6 +12,7 @@ plugins {
 }
 
 cargo {
+    jvmVariant.set(Variant.Release)
     builds.jvm {
         embedRustLibrary = (GobleyHost.current.rustTarget == rustTarget)
     }
