@@ -1,6 +1,6 @@
 # ComposeWebview
 
-Kotlin/JVM WebView using `wry` (Rust) with Gobley/UniFFI bindings, plus a Compose Desktop wrapper.
+Kotlin/JVM WebView using [wry](https://github.com/tauri-apps/wry) (Rust) with Gobley/UniFFI bindings, plus a Compose Desktop wrapper.
 
 ## Modules
 
