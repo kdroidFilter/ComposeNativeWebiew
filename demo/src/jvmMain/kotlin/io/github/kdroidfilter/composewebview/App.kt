@@ -59,7 +59,7 @@ fun App() {
                         ) {
                             // Boutons de navigation
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 NavIconButton(
                                     icon = Icons.AutoMirrored.Filled.ArrowBack,
