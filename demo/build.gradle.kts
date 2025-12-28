@@ -26,10 +26,10 @@ kotlin {
         }
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
+            implementation(compose.materialIconsExtended)
             implementation(libs.kotlinx.coroutinesSwing)
             implementation(project(":wrywebview-compose"))
             implementation(project(":wrywebview"))
-
         }
     }
 }
