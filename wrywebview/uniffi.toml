@@ -1,2 +1,2 @@
-package_name = "io.github.kdroidfilter.composewebview.wry"
+package_name = "io.github.kdroidfilter.webview.wry"
 cdylib_name = "composewebview_wry"

@@ -1,5 +1,6 @@
 //! WebView state management and registry.
 
+use std::collections::VecDeque;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -13,6 +14,10 @@ use crate::error::WebViewError;
 pub struct WebViewState {
     pub is_loading: AtomicBool,
     pub current_url: Mutex<String>,
+    pub page_title: Mutex<String>,
+    history: Mutex<Vec<String>>,
+    history_index: Mutex<isize>,
+    ipc_messages: Mutex<VecDeque<String>>,
 }
 
 impl WebViewState {
@@ -21,7 +26,114 @@ impl WebViewState {
         Self {
             is_loading: AtomicBool::new(true),
             current_url: Mutex::new(url),
+            page_title: Mutex::new(String::new()),
+            history: Mutex::new(Vec::new()),
+            history_index: Mutex::new(-1),
+            ipc_messages: Mutex::new(VecDeque::new()),
         }
+    }
+
+    pub fn update_current_url(&self, url: String) -> Result<(), WebViewError> {
+        {
+            let mut current = self
+                .current_url
+                .lock()
+                .map_err(|_| WebViewError::Internal("url lock poisoned".to_string()))?;
+            *current = url.clone();
+        }
+        self.update_history(url)
+    }
+
+    pub fn update_page_title(&self, title: String) -> Result<(), WebViewError> {
+        let mut page_title = self
+            .page_title
+            .lock()
+            .map_err(|_| WebViewError::Internal("title lock poisoned".to_string()))?;
+        *page_title = title;
+        Ok(())
+    }
+
+    pub fn push_ipc_message(&self, message: String) -> Result<(), WebViewError> {
+        let mut queue = self
+            .ipc_messages
+            .lock()
+            .map_err(|_| WebViewError::Internal("ipc queue lock poisoned".to_string()))?;
+        queue.push_back(message);
+        Ok(())
+    }
+
+    pub fn drain_ipc_messages(&self) -> Result<Vec<String>, WebViewError> {
+        let mut queue = self
+            .ipc_messages
+            .lock()
+            .map_err(|_| WebViewError::Internal("ipc queue lock poisoned".to_string()))?;
+        Ok(queue.drain(..).collect())
+    }
+
+    pub fn can_go_back(&self) -> Result<bool, WebViewError> {
+        let history = self
+            .history
+            .lock()
+            .map_err(|_| WebViewError::Internal("history lock poisoned".to_string()))?;
+        let index = self
+            .history_index
+            .lock()
+            .map_err(|_| WebViewError::Internal("history index lock poisoned".to_string()))?;
+        Ok(*index > 0 && !history.is_empty())
+    }
+
+    pub fn can_go_forward(&self) -> Result<bool, WebViewError> {
+        let history = self
+            .history
+            .lock()
+            .map_err(|_| WebViewError::Internal("history lock poisoned".to_string()))?;
+        let index = self
+            .history_index
+            .lock()
+            .map_err(|_| WebViewError::Internal("history index lock poisoned".to_string()))?;
+        if history.is_empty() || *index < 0 {
+            return Ok(false);
+        }
+        let idx = *index as usize;
+        Ok(idx < history.len().saturating_sub(1))
+    }
+
+    fn update_history(&self, new_url: String) -> Result<(), WebViewError> {
+        let mut history = self
+            .history
+            .lock()
+            .map_err(|_| WebViewError::Internal("history lock poisoned".to_string()))?;
+        let mut index = self
+            .history_index
+            .lock()
+            .map_err(|_| WebViewError::Internal("history index lock poisoned".to_string()))?;
+
+        if *index >= 0 {
+            let idx = *index as usize;
+            if history.get(idx).is_some_and(|url| url == &new_url) {
+                return Ok(());
+            }
+            let back_url = if idx > 0 { history.get(idx - 1) } else { None };
+            let forward_url = history.get(idx + 1);
+            if back_url.is_some_and(|url| url == &new_url) {
+                *index -= 1;
+                return Ok(());
+            }
+            if forward_url.is_some_and(|url| url == &new_url) {
+                *index += 1;
+                return Ok(());
+            }
+
+            if idx + 1 < history.len() {
+                history.truncate(idx + 1);
+            }
+        } else {
+            history.clear();
+        }
+
+        history.push(new_url);
+        *index = (history.len() as isize) - 1;
+        Ok(())
     }
 }
 

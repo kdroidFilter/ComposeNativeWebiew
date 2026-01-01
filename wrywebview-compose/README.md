@@ -1,6 +1,6 @@
 # wrywebview-compose
 
-Minimal Compose Desktop wrapper for the `wrywebview` module.
+Compose Desktop wrapper for the `wrywebview` module, exposing the `io.github.kdroidfilter.webview.*` API (inspired by `compose-webview-multiplatform`).
 
 ## Usage (JVM)
 
@@ -18,14 +18,13 @@ Use the composable:
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import io.github.kdroidfilter.composewebview.WryWebView
+import io.github.kdroidfilter.webview.web.WebView
+import io.github.kdroidfilter.webview.web.rememberWebViewState
 
 @Composable
 fun App() {
-    WryWebView(
-        url = "https://sample.com",
-        modifier = Modifier.fillMaxSize(),
-    )
+    val state = rememberWebViewState("https://sample.com")
+    WebView(state = state, modifier = Modifier.fillMaxSize())
 }
 ```
 

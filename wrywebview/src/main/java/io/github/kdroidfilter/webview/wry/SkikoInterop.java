@@ -1,4 +1,4 @@
-package io.github.kdroidfilter.composewebview.wry;
+package io.github.kdroidfilter.webview.wry;
 
 import java.awt.Canvas;
 import java.awt.Component;

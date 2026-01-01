@@ -8,22 +8,140 @@ mod handle;
 mod platform;
 mod state;
 
+use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use wry::cookie::time::OffsetDateTime;
+use wry::cookie::{Cookie, Expiration, SameSite};
+use wry::http::header::HeaderName;
+use wry::http::{HeaderMap, HeaderValue};
 use wry::WebViewBuilder;
 
 pub use error::WebViewError;
 
 use handle::{make_bounds, raw_window_handle_from, RawWindow};
-use platform::run_on_main_thread;
 use state::{get_state, register, unregister, with_webview, WebViewState};
 
 #[cfg(target_os = "linux")]
 use platform::linux::{ensure_gtk_initialized, run_on_gtk_thread};
 
+#[cfg(not(target_os = "linux"))]
+use platform::run_on_main_thread;
+
 #[cfg(target_os = "macos")]
 use platform::macos::{DispatchQueue, MainThreadMarker};
+
+// =============================================================================
+// Public records/enums (UniFFI)
+// =============================================================================
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct HttpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum CookieSameSite {
+    None,
+    Lax,
+    Strict,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct WebViewCookie {
+    pub name: String,
+    pub value: String,
+    pub domain: Option<String>,
+    pub path: Option<String>,
+    /// Unix timestamp in milliseconds.
+    pub expires_date_ms: Option<i64>,
+    pub is_session_only: bool,
+    /// Max-Age in seconds.
+    pub max_age_sec: Option<i64>,
+    pub same_site: Option<CookieSameSite>,
+    pub is_secure: Option<bool>,
+    pub is_http_only: Option<bool>,
+}
+
+fn header_map_from(headers: Vec<HttpHeader>) -> Result<HeaderMap, WebViewError> {
+    let mut map = HeaderMap::new();
+    for header in headers {
+        let name = HeaderName::from_str(&header.name).map_err(|_| {
+            WebViewError::Internal(format!("invalid header name: {}", header.name))
+        })?;
+        let value = HeaderValue::from_str(&header.value).map_err(|_| {
+            WebViewError::Internal(format!("invalid header value for {}: {}", header.name, header.value))
+        })?;
+        map.insert(name, value);
+    }
+    Ok(map)
+}
+
+fn cookie_record_from(cookie: &Cookie<'_>) -> WebViewCookie {
+    let expires_date_ms = cookie
+        .expires()
+        .and_then(Expiration::datetime)
+        .map(|dt| dt.unix_timestamp() * 1000 + (dt.nanosecond() as i64 / 1_000_000));
+
+    let is_session_only = matches!(cookie.expires(), Some(Expiration::Session));
+
+    WebViewCookie {
+        name: cookie.name().to_string(),
+        value: cookie.value().to_string(),
+        domain: cookie.domain().map(ToString::to_string),
+        path: cookie.path().map(ToString::to_string),
+        expires_date_ms,
+        is_session_only,
+        max_age_sec: cookie.max_age().map(|d| d.whole_seconds()),
+        same_site: cookie.same_site().map(|s| match s {
+            SameSite::None => CookieSameSite::None,
+            SameSite::Lax => CookieSameSite::Lax,
+            SameSite::Strict => CookieSameSite::Strict,
+        }),
+        is_secure: cookie.secure(),
+        is_http_only: cookie.http_only(),
+    }
+}
+
+fn cookie_from_record(cookie: WebViewCookie) -> Result<Cookie<'static>, WebViewError> {
+    let mut builder = Cookie::build((cookie.name, cookie.value));
+
+    if let Some(domain) = cookie.domain {
+        builder = builder.domain(domain);
+    }
+    if let Some(path) = cookie.path {
+        builder = builder.path(path);
+    }
+    if let Some(expires_ms) = cookie.expires_date_ms {
+        let dt = OffsetDateTime::from_unix_timestamp_nanos((expires_ms as i128) * 1_000_000)
+            .map_err(|_| WebViewError::Internal("invalid expires_date_ms".to_string()))?;
+        builder = builder.expires(dt);
+    } else if cookie.is_session_only {
+        builder = builder.expires(None::<OffsetDateTime>);
+    }
+
+    if let Some(max_age) = cookie.max_age_sec {
+        builder = builder.max_age(wry::cookie::time::Duration::seconds(max_age));
+    }
+    if let Some(is_secure) = cookie.is_secure {
+        builder = builder.secure(is_secure);
+    }
+    if let Some(is_http_only) = cookie.is_http_only {
+        builder = builder.http_only(is_http_only);
+    }
+    if let Some(same_site) = cookie.same_site {
+        let mapped = match same_site {
+            CookieSameSite::None => SameSite::None,
+            CookieSameSite::Lax => SameSite::Lax,
+            CookieSameSite::Strict => SameSite::Strict,
+        };
+        builder = builder.same_site(mapped);
+    }
+
+    Ok(builder.build())
+}
 
 // ============================================================================
 // WebView Creation
@@ -34,10 +152,21 @@ fn create_webview_inner(
     width: i32,
     height: i32,
     url: String,
+    user_agent: Option<String>,
 ) -> Result<u64, WebViewError> {
+    let user_agent =
+        user_agent.and_then(|ua| {
+            let trimmed = ua.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        });
+
     eprintln!(
-        "[wrywebview] create_webview handle=0x{:x} size={}x{} url={}",
-        parent_handle, width, height, url
+        "[wrywebview] create_webview handle=0x{:x} size={}x{} url={} user_agent={}",
+        parent_handle,
+        width,
+        height,
+        url,
+        user_agent.as_deref().unwrap_or("<default>")
     );
 
     let raw = raw_window_handle_from(parent_handle)?;
@@ -49,15 +178,23 @@ fn create_webview_inner(
     let state = Arc::new(WebViewState::new(url.clone()));
     let state_for_nav = Arc::clone(&state);
     let state_for_load = Arc::clone(&state);
+    let state_for_title = Arc::clone(&state);
+    let state_for_ipc = Arc::clone(&state);
 
-    let webview = WebViewBuilder::new()
+    let mut builder = WebViewBuilder::new()
         .with_url(&url)
-        .with_bounds(make_bounds(0, 0, width, height))
+        .with_bounds(make_bounds(0, 0, width, height));
+
+    if let Some(ua) = user_agent {
+        builder = builder.with_user_agent(ua);
+    }
+
+    let webview = builder
         .with_navigation_handler(move |new_url| {
             eprintln!("[wrywebview] navigation_handler url={}", new_url);
             state_for_nav.is_loading.store(true, Ordering::SeqCst);
-            if let Ok(mut current) = state_for_nav.current_url.lock() {
-                *current = new_url.clone();
+            if let Err(e) = state_for_nav.update_current_url(new_url.clone()) {
+                eprintln!("[wrywebview] navigation_handler state update failed: {}", e);
             }
             true
         })
@@ -70,10 +207,24 @@ fn create_webview_inner(
                 wry::PageLoadEvent::Finished => {
                     eprintln!("[wrywebview] page_load_handler event=Finished url={}", url);
                     state_for_load.is_loading.store(false, Ordering::SeqCst);
-                    if let Ok(mut current) = state_for_load.current_url.lock() {
-                        *current = url.clone();
+                    if let Err(e) = state_for_load.update_current_url(url.clone()) {
+                        eprintln!("[wrywebview] page_load_handler state update failed: {}", e);
                     }
                 }
+            }
+        })
+        .with_document_title_changed_handler(move |title| {
+            eprintln!("[wrywebview] title_changed title={}", title);
+            if let Err(e) = state_for_title.update_page_title(title) {
+                eprintln!("[wrywebview] title_changed state update failed: {}", e);
+            }
+        })
+        .with_ipc_handler(move |request| {
+            let url = request.uri().to_string();
+            let message = request.into_body();
+            eprintln!("[wrywebview] ipc url={} body_len={}", url, message.len());
+            if let Err(e) = state_for_ipc.push_ipc_message(message) {
+                eprintln!("[wrywebview] ipc queue push failed: {}", e);
             }
         })
         .build_as_child(&window)?;
@@ -92,11 +243,32 @@ pub fn create_webview(
 ) -> Result<u64, WebViewError> {
     #[cfg(target_os = "linux")]
     {
-        return run_on_gtk_thread(move || create_webview_inner(parent_handle, width, height, url));
+        return run_on_gtk_thread(move || {
+            create_webview_inner(parent_handle, width, height, url, None)
+        });
     }
 
     #[cfg(not(target_os = "linux"))]
-    run_on_main_thread(move || create_webview_inner(parent_handle, width, height, url))
+    run_on_main_thread(move || create_webview_inner(parent_handle, width, height, url, None))
+}
+
+#[uniffi::export]
+pub fn create_webview_with_user_agent(
+    parent_handle: u64,
+    width: i32,
+    height: i32,
+    url: String,
+    user_agent: Option<String>,
+) -> Result<u64, WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || {
+            create_webview_inner(parent_handle, width, height, url, user_agent)
+        });
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || create_webview_inner(parent_handle, width, height, url, user_agent))
 }
 
 // ============================================================================
@@ -157,6 +329,105 @@ pub fn load_url(id: u64, url: String) -> Result<(), WebViewError> {
 
     #[cfg(not(target_os = "linux"))]
     run_on_main_thread(move || load_url_inner(id, url))
+}
+
+fn load_url_with_headers_inner(
+    id: u64,
+    url: String,
+    headers: Vec<HttpHeader>,
+) -> Result<(), WebViewError> {
+    eprintln!(
+        "[wrywebview] load_url_with_headers id={} url={} headers={}",
+        id,
+        url,
+        headers.len()
+    );
+    if let Ok(state) = get_state(id) {
+        state.is_loading.store(true, Ordering::SeqCst);
+    }
+    let header_map = header_map_from(headers)?;
+    with_webview(id, |webview| {
+        webview
+            .load_url_with_headers(&url, header_map)
+            .map_err(WebViewError::from)
+    })
+}
+
+#[uniffi::export]
+pub fn load_url_with_headers(
+    id: u64,
+    url: String,
+    headers: Vec<HttpHeader>,
+) -> Result<(), WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || load_url_with_headers_inner(id, url, headers));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || load_url_with_headers_inner(id, url, headers))
+}
+
+fn load_html_inner(id: u64, html: String) -> Result<(), WebViewError> {
+    eprintln!("[wrywebview] load_html id={} bytes={}", id, html.len());
+    if let Ok(state) = get_state(id) {
+        state.is_loading.store(true, Ordering::SeqCst);
+    }
+    with_webview(id, |webview| webview.load_html(&html).map_err(WebViewError::from))
+}
+
+#[uniffi::export]
+pub fn load_html(id: u64, html: String) -> Result<(), WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || load_html_inner(id, html));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || load_html_inner(id, html))
+}
+
+fn stop_loading_inner(id: u64) -> Result<(), WebViewError> {
+    eprintln!("[wrywebview] stop_loading id={}", id);
+    if let Ok(state) = get_state(id) {
+        state.is_loading.store(false, Ordering::SeqCst);
+    }
+    with_webview(id, |webview| {
+        webview
+            .evaluate_script("window.stop && window.stop();")
+            .map_err(WebViewError::from)
+    })
+}
+
+#[uniffi::export]
+pub fn stop_loading(id: u64) -> Result<(), WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || stop_loading_inner(id));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || stop_loading_inner(id))
+}
+
+fn evaluate_javascript_inner(id: u64, script: String) -> Result<(), WebViewError> {
+    eprintln!(
+        "[wrywebview] evaluate_javascript id={} bytes={}",
+        id,
+        script.len()
+    );
+    with_webview(id, |webview| webview.evaluate_script(&script).map_err(WebViewError::from))
+}
+
+#[uniffi::export]
+pub fn evaluate_javascript(id: u64, script: String) -> Result<(), WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || evaluate_javascript_inner(id, script));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || evaluate_javascript_inner(id, script))
 }
 
 fn go_back_inner(id: u64) -> Result<(), WebViewError> {
@@ -270,6 +541,122 @@ pub fn get_url(id: u64) -> Result<String, WebViewError> {
 pub fn is_loading(id: u64) -> Result<bool, WebViewError> {
     let state = get_state(id)?;
     Ok(state.is_loading.load(Ordering::SeqCst))
+}
+
+#[uniffi::export]
+pub fn get_title(id: u64) -> Result<String, WebViewError> {
+    let state = get_state(id)?;
+    let title = state
+        .page_title
+        .lock()
+        .map_err(|_| WebViewError::Internal("title lock poisoned".to_string()))?;
+    Ok(title.clone())
+}
+
+#[uniffi::export]
+pub fn can_go_back(id: u64) -> Result<bool, WebViewError> {
+    let state = get_state(id)?;
+    state.can_go_back()
+}
+
+#[uniffi::export]
+pub fn can_go_forward(id: u64) -> Result<bool, WebViewError> {
+    let state = get_state(id)?;
+    state.can_go_forward()
+}
+
+#[uniffi::export]
+pub fn drain_ipc_messages(id: u64) -> Result<Vec<String>, WebViewError> {
+    let state = get_state(id)?;
+    state.drain_ipc_messages()
+}
+
+// ============================================================================
+// Cookies
+// ============================================================================
+
+fn get_cookies_for_url_inner(id: u64, url: String) -> Result<Vec<WebViewCookie>, WebViewError> {
+    eprintln!("[wrywebview] get_cookies_for_url id={} url={}", id, url);
+    with_webview(id, |webview| {
+        let cookies = webview.cookies_for_url(&url).map_err(WebViewError::from)?;
+        Ok(cookies.iter().map(cookie_record_from).collect())
+    })
+}
+
+#[uniffi::export]
+pub fn get_cookies_for_url(id: u64, url: String) -> Result<Vec<WebViewCookie>, WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || get_cookies_for_url_inner(id, url));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || get_cookies_for_url_inner(id, url))
+}
+
+fn clear_cookies_for_url_inner(id: u64, url: String) -> Result<(), WebViewError> {
+    eprintln!("[wrywebview] clear_cookies_for_url id={} url={}", id, url);
+    with_webview(id, |webview| {
+        let cookies = webview.cookies_for_url(&url).map_err(WebViewError::from)?;
+        for cookie in cookies {
+            webview
+                .delete_cookie(&cookie)
+                .map_err(WebViewError::from)?;
+        }
+        Ok(())
+    })
+}
+
+#[uniffi::export]
+pub fn clear_cookies_for_url(id: u64, url: String) -> Result<(), WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || clear_cookies_for_url_inner(id, url));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || clear_cookies_for_url_inner(id, url))
+}
+
+fn clear_all_cookies_inner(id: u64) -> Result<(), WebViewError> {
+    eprintln!("[wrywebview] clear_all_cookies id={}", id);
+    with_webview(id, |webview| {
+        let cookies = webview.cookies().map_err(WebViewError::from)?;
+        for cookie in cookies {
+            webview
+                .delete_cookie(&cookie)
+                .map_err(WebViewError::from)?;
+        }
+        Ok(())
+    })
+}
+
+#[uniffi::export]
+pub fn clear_all_cookies(id: u64) -> Result<(), WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || clear_all_cookies_inner(id));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || clear_all_cookies_inner(id))
+}
+
+fn set_cookie_inner(id: u64, cookie: WebViewCookie) -> Result<(), WebViewError> {
+    eprintln!("[wrywebview] set_cookie id={} name={}", id, &cookie.name);
+    let native = cookie_from_record(cookie)?;
+    with_webview(id, |webview| webview.set_cookie(&native).map_err(WebViewError::from))
+}
+
+#[uniffi::export]
+pub fn set_cookie(id: u64, cookie: WebViewCookie) -> Result<(), WebViewError> {
+    #[cfg(target_os = "linux")]
+    {
+        return run_on_gtk_thread(move || set_cookie_inner(id, cookie));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    run_on_main_thread(move || set_cookie_inner(id, cookie))
 }
 
 // ============================================================================

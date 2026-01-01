@@ -1,4 +1,4 @@
-package io.github.kdroidfilter.composewebview
+package io.github.kdroidfilter.webview.demo
 
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application

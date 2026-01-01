@@ -1,4 +1,4 @@
-package io.github.kdroidfilter.composewebview.wry
+package io.github.kdroidfilter.webview.wry
 
 import com.sun.jna.Native
 import java.awt.BorderLayout
@@ -8,12 +8,19 @@ import javax.swing.SwingUtilities
 import javax.swing.Timer
 
 
-class WryWebViewPanel(initialUrl: String) : JPanel() {
+class WryWebViewPanel(
+    initialUrl: String,
+    customUserAgent: String? = null,
+) : JPanel() {
     private val host = SkikoInterop.createHost()
     private var webviewId: ULong? = null
     private var parentHandle: ULong = 0UL
     private var parentIsWindow: Boolean = false
     private var pendingUrl: String = initialUrl
+    private val customUserAgent: String? = customUserAgent?.trim()?.takeIf { it.isNotEmpty() }
+    private var pendingUrlWithHeaders: String? = null
+    private var pendingHeaders: Map<String, String> = emptyMap()
+    private var pendingHtml: String? = null
     private var createTimer: Timer? = null
     private var gtkTimer: Timer? = null
     private var windowsTimer: Timer? = null
@@ -49,16 +56,54 @@ class WryWebViewPanel(initialUrl: String) : JPanel() {
     }
 
     fun loadUrl(url: String) {
+        loadUrl(url, emptyMap())
+    }
+
+    fun loadUrl(url: String, additionalHttpHeaders: Map<String, String>) {
         pendingUrl = url
+        pendingHtml = null
+        pendingHeaders = additionalHttpHeaders
+        pendingUrlWithHeaders = if (additionalHttpHeaders.isNotEmpty()) url else null
+        if (pendingUrlWithHeaders != null) {
+            pendingUrl = "about:blank"
+        }
         if (SwingUtilities.isEventDispatchThread()) {
-            webviewId?.let { NativeBindings.loadUrl(it, url) }
+            webviewId?.let {
+                if (additionalHttpHeaders.isNotEmpty()) {
+                    NativeBindings.loadUrlWithHeaders(it, url, additionalHttpHeaders)
+                } else {
+                    NativeBindings.loadUrl(it, url)
+                }
+            }
                 ?: scheduleCreateIfNeeded()
         } else {
             SwingUtilities.invokeLater {
-                webviewId?.let { NativeBindings.loadUrl(it, url) } ?: scheduleCreateIfNeeded()
+                webviewId?.let {
+                    if (additionalHttpHeaders.isNotEmpty()) {
+                        NativeBindings.loadUrlWithHeaders(it, url, additionalHttpHeaders)
+                    } else {
+                        NativeBindings.loadUrl(it, url)
+                    }
+                } ?: scheduleCreateIfNeeded()
             }
         }
-        log("loadUrl url=$url webviewId=$webviewId")
+        log("loadUrl url=$url headers=${additionalHttpHeaders.size} webviewId=$webviewId")
+    }
+
+    fun loadHtml(html: String) {
+        pendingHtml = html
+        pendingUrl = "about:blank"
+        pendingHeaders = emptyMap()
+        pendingUrlWithHeaders = null
+        val action = {
+            webviewId?.let { NativeBindings.loadHtml(it, html) } ?: scheduleCreateIfNeeded()
+        }
+        if (SwingUtilities.isEventDispatchThread()) {
+            action()
+        } else {
+            SwingUtilities.invokeLater { action() }
+        }
+        log("loadHtml bytes=${html.length} webviewId=$webviewId")
     }
 
     fun goBack() {
@@ -91,6 +136,26 @@ class WryWebViewPanel(initialUrl: String) : JPanel() {
         log("reload webviewId=$webviewId")
     }
 
+    fun stopLoading() {
+        val action = { webviewId?.let { NativeBindings.stopLoading(it) } }
+        if (SwingUtilities.isEventDispatchThread()) {
+            action()
+        } else {
+            SwingUtilities.invokeLater { action() }
+        }
+        log("stopLoading webviewId=$webviewId")
+    }
+
+    fun evaluateJavaScript(script: String) {
+        val action = { webviewId?.let { NativeBindings.evaluateJavaScript(it, script) } }
+        if (SwingUtilities.isEventDispatchThread()) {
+            action()
+        } else {
+            SwingUtilities.invokeLater { action() }
+        }
+        log("evaluateJavaScript bytes=${script.length} webviewId=$webviewId")
+    }
+
     fun getCurrentUrl(): String? {
         return webviewId?.let {
             try {
@@ -111,6 +176,88 @@ class WryWebViewPanel(initialUrl: String) : JPanel() {
                 true
             }
         } ?: true
+    }
+
+    fun getTitle(): String? {
+        return webviewId?.let {
+            try {
+                NativeBindings.getTitle(it)
+            } catch (e: Exception) {
+                log("getTitle failed: ${e.message}")
+                null
+            }
+        }
+    }
+
+    fun canGoBack(): Boolean {
+        return webviewId?.let {
+            try {
+                NativeBindings.canGoBack(it)
+            } catch (e: Exception) {
+                log("canGoBack failed: ${e.message}")
+                false
+            }
+        } ?: false
+    }
+
+    fun canGoForward(): Boolean {
+        return webviewId?.let {
+            try {
+                NativeBindings.canGoForward(it)
+            } catch (e: Exception) {
+                log("canGoForward failed: ${e.message}")
+                false
+            }
+        } ?: false
+    }
+
+    fun drainIpcMessages(): List<String> {
+        return webviewId?.let {
+            try {
+                NativeBindings.drainIpcMessages(it)
+            } catch (e: Exception) {
+                log("drainIpcMessages failed: ${e.message}")
+                emptyList()
+            }
+        } ?: emptyList()
+    }
+
+    fun getCookiesForUrl(url: String): List<WebViewCookie> {
+        return webviewId?.let {
+            try {
+                NativeBindings.getCookiesForUrl(it, url)
+            } catch (e: Exception) {
+                log("getCookiesForUrl failed: ${e.message}")
+                emptyList()
+            }
+        } ?: emptyList()
+    }
+
+    fun clearCookiesForUrl(url: String) {
+        val action = { webviewId?.let { NativeBindings.clearCookiesForUrl(it, url) } }
+        if (SwingUtilities.isEventDispatchThread()) {
+            action()
+        } else {
+            SwingUtilities.invokeLater { action() }
+        }
+    }
+
+    fun clearAllCookies() {
+        val action = { webviewId?.let { NativeBindings.clearAllCookies(it) } }
+        if (SwingUtilities.isEventDispatchThread()) {
+            action()
+        } else {
+            SwingUtilities.invokeLater { action() }
+        }
+    }
+
+    fun setCookie(cookie: WebViewCookie) {
+        val action = { webviewId?.let { NativeBindings.setCookie(it, cookie) } }
+        if (SwingUtilities.isEventDispatchThread()) {
+            action()
+        } else {
+            SwingUtilities.invokeLater { action() }
+        }
     }
 
     fun isReady(): Boolean = webviewId != null
@@ -142,15 +289,37 @@ class WryWebViewPanel(initialUrl: String) : JPanel() {
         parentIsWindow = resolved.isWindow
         log("createIfNeeded handle=$parentHandle parentIsWindow=$parentIsWindow size=${host.width}x${host.height}")
         return try {
-            webviewId = NativeBindings.createWebview(
-                parentHandle,
-                host.width.coerceAtLeast(1),
-                host.height.coerceAtLeast(1),
-                pendingUrl,
-            )
+            val width = host.width.coerceAtLeast(1)
+            val height = host.height.coerceAtLeast(1)
+            val userAgent = customUserAgent
+
+            webviewId =
+                if (userAgent == null) {
+                    NativeBindings.createWebview(parentHandle, width, height, pendingUrl)
+                } else {
+                    NativeBindings.createWebviewWithUserAgent(parentHandle, width, height, pendingUrl, userAgent)
+                }
             updateBounds()
             startGtkPumpIfNeeded()
             startWindowsPumpIfNeeded()
+            // Apply any pending content that requires an explicit call after creation.
+            val id = webviewId
+            val html = pendingHtml
+            val urlWithHeaders = pendingUrlWithHeaders
+            val headers = pendingHeaders
+            if (id != null) {
+                when {
+                    html != null -> {
+                        pendingHtml = null
+                        NativeBindings.loadHtml(id, html)
+                    }
+                    urlWithHeaders != null && headers.isNotEmpty() -> {
+                        pendingUrlWithHeaders = null
+                        pendingHeaders = emptyMap()
+                        NativeBindings.loadUrlWithHeaders(id, urlWithHeaders, headers)
+                    }
+                }
+            }
             log("createIfNeeded success id=$webviewId")
             true
         } catch (e: RuntimeException) {
@@ -349,46 +518,114 @@ class WryWebViewPanel(initialUrl: String) : JPanel() {
 
 private object NativeBindings {
     fun createWebview(parentHandle: ULong, width: Int, height: Int, url: String): ULong {
-        return io.github.kdroidfilter.composewebview.wry.createWebview(parentHandle, width, height, url)
+        return io.github.kdroidfilter.webview.wry.createWebview(parentHandle, width, height, url)
+    }
+
+    fun createWebviewWithUserAgent(
+        parentHandle: ULong,
+        width: Int,
+        height: Int,
+        url: String,
+        userAgent: String,
+    ): ULong {
+        return io.github.kdroidfilter.webview.wry.createWebviewWithUserAgent(
+            parentHandle,
+            width,
+            height,
+            url,
+            userAgent,
+        )
     }
 
     fun setBounds(id: ULong, x: Int, y: Int, width: Int, height: Int) {
-        io.github.kdroidfilter.composewebview.wry.setBounds(id, x, y, width, height)
+        io.github.kdroidfilter.webview.wry.setBounds(id, x, y, width, height)
     }
 
     fun loadUrl(id: ULong, url: String) {
-        io.github.kdroidfilter.composewebview.wry.loadUrl(id, url)
+        io.github.kdroidfilter.webview.wry.loadUrl(id, url)
+    }
+
+    fun loadUrlWithHeaders(id: ULong, url: String, additionalHttpHeaders: Map<String, String>) {
+        io.github.kdroidfilter.webview.wry.loadUrlWithHeaders(
+            id,
+            url,
+            additionalHttpHeaders.map { (name, value) -> HttpHeader(name, value) },
+        )
+    }
+
+    fun loadHtml(id: ULong, html: String) {
+        io.github.kdroidfilter.webview.wry.loadHtml(id, html)
     }
 
     fun goBack(id: ULong) {
-        io.github.kdroidfilter.composewebview.wry.goBack(id)
+        io.github.kdroidfilter.webview.wry.goBack(id)
     }
 
     fun goForward(id: ULong) {
-        io.github.kdroidfilter.composewebview.wry.goForward(id)
+        io.github.kdroidfilter.webview.wry.goForward(id)
     }
 
     fun reload(id: ULong) {
-        io.github.kdroidfilter.composewebview.wry.reload(id)
+        io.github.kdroidfilter.webview.wry.reload(id)
+    }
+
+    fun stopLoading(id: ULong) {
+        io.github.kdroidfilter.webview.wry.stopLoading(id)
+    }
+
+    fun evaluateJavaScript(id: ULong, script: String) {
+        io.github.kdroidfilter.webview.wry.evaluateJavascript(id, script)
     }
 
     fun getUrl(id: ULong): String {
-        return io.github.kdroidfilter.composewebview.wry.getUrl(id)
+        return io.github.kdroidfilter.webview.wry.getUrl(id)
     }
 
     fun isLoading(id: ULong): Boolean {
-        return io.github.kdroidfilter.composewebview.wry.isLoading(id)
+        return io.github.kdroidfilter.webview.wry.isLoading(id)
+    }
+
+    fun getTitle(id: ULong): String {
+        return io.github.kdroidfilter.webview.wry.getTitle(id)
+    }
+
+    fun canGoBack(id: ULong): Boolean {
+        return io.github.kdroidfilter.webview.wry.canGoBack(id)
+    }
+
+    fun canGoForward(id: ULong): Boolean {
+        return io.github.kdroidfilter.webview.wry.canGoForward(id)
+    }
+
+    fun drainIpcMessages(id: ULong): List<String> {
+        return io.github.kdroidfilter.webview.wry.drainIpcMessages(id)
+    }
+
+    fun getCookiesForUrl(id: ULong, url: String): List<WebViewCookie> {
+        return io.github.kdroidfilter.webview.wry.getCookiesForUrl(id, url)
+    }
+
+    fun clearCookiesForUrl(id: ULong, url: String) {
+        io.github.kdroidfilter.webview.wry.clearCookiesForUrl(id, url)
+    }
+
+    fun clearAllCookies(id: ULong) {
+        io.github.kdroidfilter.webview.wry.clearAllCookies(id)
+    }
+
+    fun setCookie(id: ULong, cookie: WebViewCookie) {
+        io.github.kdroidfilter.webview.wry.setCookie(id, cookie)
     }
 
     fun destroyWebview(id: ULong) {
-        io.github.kdroidfilter.composewebview.wry.destroyWebview(id)
+        io.github.kdroidfilter.webview.wry.destroyWebview(id)
     }
 
     fun pumpGtkEvents() {
-        io.github.kdroidfilter.composewebview.wry.pumpGtkEvents()
+        io.github.kdroidfilter.webview.wry.pumpGtkEvents()
     }
 
     fun pumpWindowsEvents() {
-        io.github.kdroidfilter.composewebview.wry.pumpWindowsEvents()
+        io.github.kdroidfilter.webview.wry.pumpWindowsEvents()
     }
 }

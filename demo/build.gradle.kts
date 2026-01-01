@@ -20,6 +20,7 @@ kotlin {
             implementation(compose.components.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
+            implementation(libs.kotlinx.serializationJson)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -37,12 +38,12 @@ kotlin {
 
 compose.desktop {
     application {
-        mainClass = "io.github.kdroidfilter.composewebview.MainKt"
+        mainClass = "io.github.kdroidfilter.webview.demo.MainKt"
         jvmArgs += "--enable-native-access=ALL-UNNAMED"
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "io.github.kdroidfilter.composewebview"
+            packageName = "io.github.kdroidfilter.webview.demo"
             packageVersion = "1.0.0"
         }
     }
