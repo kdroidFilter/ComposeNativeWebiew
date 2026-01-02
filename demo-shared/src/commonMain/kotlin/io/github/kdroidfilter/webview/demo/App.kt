@@ -80,6 +80,7 @@ fun App() {
             rememberWebViewState("https://httpbin.org/html") {
                 logSeverity = KLogSeverity.Info
                 desktopWebSettings.transparent = true
+                backgroundColor = androidx.compose.ui.graphics.Color.White
             }
         val jsBridge = rememberWebViewJsBridge(navigator)
 
