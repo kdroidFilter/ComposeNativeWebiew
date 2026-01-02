@@ -16,8 +16,10 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.ExperimentalComposeApi
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,7 +37,7 @@ import io.github.kdroidfilter.webview.web.rememberWebViewState
 import kotlinx.coroutines.launch
 
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeApi::class)
 fun App() {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isCompact = maxWidth < 900.dp
@@ -83,6 +85,17 @@ fun App() {
                 backgroundColor = androidx.compose.ui.graphics.Color.White
             }
         val jsBridge = rememberWebViewJsBridge(navigator)
+        val webViewContent =
+            remember(webViewState, navigator, jsBridge) {
+                movableContentOf<Modifier> { webViewModifier ->
+                    WebView(
+                        state = webViewState,
+                        navigator = navigator,
+                        webViewJsBridge = jsBridge,
+                        modifier = webViewModifier,
+                    )
+                }
+            }
 
         var urlText by remember { mutableStateOf("https://httpbin.org/html") }
 
@@ -192,12 +205,7 @@ fun App() {
 
                     if (isCompact) {
                         Column(modifier = Modifier.fillMaxSize()) {
-                            WebView(
-                                state = webViewState,
-                                navigator = navigator,
-                                webViewJsBridge = jsBridge,
-                                modifier = Modifier.weight(1f, fill = true).fillMaxWidth(),
-                            )
+                            webViewContent(Modifier.weight(1f, fill = true).fillMaxWidth())
 
                             AnimatedVisibility(visible = toolsVisible) {
                                 DemoToolsPanel(
@@ -416,12 +424,7 @@ fun App() {
                                 VerticalDivider(modifier = Modifier.fillMaxHeight())
                             }
 
-                            WebView(
-                                state = webViewState,
-                                navigator = navigator,
-                                webViewJsBridge = jsBridge,
-                                modifier = Modifier.fillMaxSize(),
-                            )
+                            webViewContent(Modifier.fillMaxSize())
                         }
                     }
                 }

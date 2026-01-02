@@ -8,6 +8,7 @@ import java.awt.event.MouseEvent
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
 import javax.swing.Timer
+import kotlin.concurrent.thread
 
 
 class WryWebViewPanel(
@@ -24,6 +25,8 @@ class WryWebViewPanel(
     private var pendingHeaders: Map<String, String> = emptyMap()
     private var pendingHtml: String? = null
     private var createTimer: Timer? = null
+    private var destroyTimer: Timer? = null
+    private var createInFlight: Boolean = false
     private var gtkTimer: Timer? = null
     private var windowsTimer: Timer? = null
     private var skikoInitialized: Boolean = false
@@ -45,6 +48,7 @@ class WryWebViewPanel(
 
     override fun addNotify() {
         super.addNotify()
+        stopDestroyTimer()
         log("addNotify displayable=${host.isDisplayable} showing=${host.isShowing} size=${host.width}x${host.height}")
         SwingUtilities.invokeLater { scheduleCreateIfNeeded() }
     }
@@ -52,7 +56,7 @@ class WryWebViewPanel(
     override fun removeNotify() {
         log("removeNotify")
         stopCreateTimer()
-        destroyIfNeeded()
+        scheduleDestroyIfNeeded()
         super.removeNotify()
     }
 
@@ -282,6 +286,7 @@ class WryWebViewPanel(
 
     private fun createIfNeeded(): Boolean {
         if (webviewId != null) return true
+        if (createInFlight) return false
         if (!host.isDisplayable || !host.isShowing) return false
         if (host.width <= 0 || host.height <= 0) return false
         // On Windows, wait for the window to be fully visible
@@ -306,48 +311,69 @@ class WryWebViewPanel(
         parentHandle = resolved.handle
         parentIsWindow = resolved.isWindow
         log("createIfNeeded handle=$parentHandle parentIsWindow=$parentIsWindow size=${host.width}x${host.height}")
-        return try {
-            val width = host.width.coerceAtLeast(1)
-            val height = host.height.coerceAtLeast(1)
-            val userAgent = customUserAgent
-
-            webviewId =
+        val width = host.width.coerceAtLeast(1)
+        val height = host.height.coerceAtLeast(1)
+        val userAgent = customUserAgent
+        val initialUrl = pendingUrl
+        val handleSnapshot = parentHandle
+        createInFlight = true
+        stopCreateTimer()
+        thread(name = "wry-webview-create", isDaemon = true) {
+            val createdId = try {
                 if (userAgent == null) {
-                    NativeBindings.createWebview(parentHandle, width, height, pendingUrl)
+                    NativeBindings.createWebview(handleSnapshot, width, height, initialUrl)
                 } else {
-                    NativeBindings.createWebviewWithUserAgent(parentHandle, width, height, pendingUrl, userAgent)
+                    NativeBindings.createWebviewWithUserAgent(handleSnapshot, width, height, initialUrl, userAgent)
                 }
-            updateBounds()
-            startGtkPumpIfNeeded()
-            startWindowsPumpIfNeeded()
-            // Apply any pending content that requires an explicit call after creation.
-            val id = webviewId
-            val html = pendingHtml
-            val urlWithHeaders = pendingUrlWithHeaders
-            val headers = pendingHeaders
-            if (id != null) {
+            } catch (e: RuntimeException) {
+                System.err.println("Failed to create Wry webview: ${e.message}")
+                e.printStackTrace()
+                null
+            }
+            SwingUtilities.invokeLater {
+                createInFlight = false
+                if (createdId == null) {
+                    scheduleCreateIfNeeded()
+                    return@invokeLater
+                }
+                if (webviewId != null) {
+                    NativeBindings.destroyWebview(createdId)
+                    return@invokeLater
+                }
+                if (!host.isDisplayable || !host.isShowing) {
+                    NativeBindings.destroyWebview(createdId)
+                    return@invokeLater
+                }
+                webviewId = createdId
+                updateBounds()
+                startGtkPumpIfNeeded()
+                startWindowsPumpIfNeeded()
+                // Apply any pending content that requires an explicit call after creation.
+                val html = pendingHtml
+                val urlWithHeaders = pendingUrlWithHeaders
+                val headers = pendingHeaders
                 when {
                     html != null -> {
                         pendingHtml = null
-                        NativeBindings.loadHtml(id, html)
+                        NativeBindings.loadHtml(createdId, html)
                     }
                     urlWithHeaders != null && headers.isNotEmpty() -> {
                         pendingUrlWithHeaders = null
                         pendingHeaders = emptyMap()
-                        NativeBindings.loadUrlWithHeaders(id, urlWithHeaders, headers)
+                        NativeBindings.loadUrlWithHeaders(createdId, urlWithHeaders, headers)
+                    }
+                    pendingUrl != initialUrl -> {
+                        NativeBindings.loadUrl(createdId, pendingUrl)
                     }
                 }
+                log("createIfNeeded success id=$webviewId")
             }
-            log("createIfNeeded success id=$webviewId")
-            true
-        } catch (e: RuntimeException) {
-            System.err.println("Failed to create Wry webview: ${e.message}")
-            e.printStackTrace()
-            true
         }
+        return true
     }
 
     private fun destroyIfNeeded() {
+        stopDestroyTimer()
         stopGtkPump()
         stopWindowsPump()
         stopBoundsTimer()
@@ -364,7 +390,7 @@ class WryWebViewPanel(
     private fun updateBounds() {
         val id = webviewId ?: return
         val bounds = boundsInParent()
-        if (IS_LINUX) {
+        if (IS_LINUX || IS_MAC) {
             pendingBounds = bounds
             if (boundsTimer == null) {
                 boundsTimer = Timer(16) {
@@ -411,7 +437,7 @@ class WryWebViewPanel(
     }
 
     private fun scheduleCreateIfNeeded() {
-        if (webviewId != null || createTimer != null) return
+        if (webviewId != null || createTimer != null || createInFlight) return
         log("scheduleCreateIfNeeded")
         val delay = if (IS_WINDOWS) 100 else 16
         createTimer = Timer(delay) {
@@ -424,6 +450,25 @@ class WryWebViewPanel(
     private fun stopCreateTimer() {
         createTimer?.stop()
         createTimer = null
+    }
+
+    private fun scheduleDestroyIfNeeded() {
+        if (destroyTimer != null) return
+        if (webviewId == null && !createInFlight) return
+        destroyTimer = Timer(400) {
+            stopDestroyTimer()
+            if (!host.isDisplayable || !host.isShowing) {
+                destroyIfNeeded()
+            }
+        }.apply {
+            isRepeats = false
+            start()
+        }
+    }
+
+    private fun stopDestroyTimer() {
+        destroyTimer?.stop()
+        destroyTimer = null
     }
 
     private fun stopBoundsTimer() {
@@ -442,7 +487,9 @@ class WryWebViewPanel(
     }
 
     private fun log(message: String) {
-        System.err.println("[WryWebViewPanel] $message")
+        if (LOG_ENABLED) {
+            System.err.println("[WryWebViewPanel] $message")
+        }
     }
 
     private fun resolveParentHandle(): ParentHandle? {
@@ -531,6 +578,17 @@ class WryWebViewPanel(
         private val IS_LINUX = OS_NAME.contains("linux")
         private val IS_MAC = OS_NAME.contains("mac")
         private val IS_WINDOWS = OS_NAME.contains("windows")
+        private val LOG_ENABLED = run {
+            val raw = System.getProperty("composewebview.wry.log") ?: System.getenv("WRYWEBVIEW_LOG")
+            when {
+                raw == null -> false
+                raw == "1" -> true
+                raw.equals("true", ignoreCase = true) -> true
+                raw.equals("yes", ignoreCase = true) -> true
+                raw.equals("debug", ignoreCase = true) -> true
+                else -> false
+            }
+        }
     }
 }
 

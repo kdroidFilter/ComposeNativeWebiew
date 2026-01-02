@@ -11,6 +11,7 @@ mod state;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use wry::cookie::time::OffsetDateTime;
 use wry::cookie::{Cookie, Expiration, SameSite};
@@ -144,6 +145,18 @@ fn cookie_from_record(cookie: WebViewCookie) -> Result<Cookie<'static>, WebViewE
     }
 
     Ok(builder.build())
+}
+
+fn log_enabled() -> bool {
+    static LOG_ENABLED: OnceLock<bool> = OnceLock::new();
+    *LOG_ENABLED.get_or_init(|| {
+        std::env::var("WRYWEBVIEW_LOG")
+            .map(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                matches!(value.as_str(), "1" | "true" | "yes" | "debug")
+            })
+            .unwrap_or(false)
+    })
 }
 
 // ============================================================================
@@ -329,10 +342,12 @@ pub fn create_webview_with_user_agent(
 // ============================================================================
 
 fn set_bounds_inner(id: u64, x: i32, y: i32, width: i32, height: i32) -> Result<(), WebViewError> {
-    eprintln!(
-        "[wrywebview] set_bounds id={} pos=({}, {}) size={}x{}",
-        id, x, y, width, height
-    );
+    if log_enabled() {
+        eprintln!(
+            "[wrywebview] set_bounds id={} pos=({}, {}) size={}x{}",
+            id, x, y, width, height
+        );
+    }
     let bounds = make_bounds(x, y, width, height);
     with_webview(id, |webview| webview.set_bounds(bounds).map_err(WebViewError::from))
 }
@@ -778,12 +793,23 @@ fn destroy_webview_inner(id: u64) -> Result<(), WebViewError> {
 
 #[uniffi::export]
 pub fn destroy_webview(id: u64) -> Result<(), WebViewError> {
+    #[cfg(target_os = "macos")]
+    {
+        if MainThreadMarker::new().is_some() {
+            return destroy_webview_inner(id);
+        }
+        DispatchQueue::main().exec_async(move || {
+            let _ = destroy_webview_inner(id);
+        });
+        return Ok(());
+    }
+
     #[cfg(target_os = "linux")]
     {
         return run_on_gtk_thread(move || destroy_webview_inner(id));
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "windows", not(any(target_os = "linux", target_os = "macos"))))]
     run_on_main_thread(move || destroy_webview_inner(id))
 }
 
