@@ -1,78 +1,87 @@
-# ComposeWebview
+# ComposeNativeWebView 🌐
 
-Compose Multiplatform **WebView** with a **KevinnZou/compose-webview-multiplatform-inspired API** under `io.github.kdroidfilter.webview.*`.
+**A lightweight Compose Multiplatform WebView** with a
+**KevinnZou/compose-webview-multiplatform-inspired API**, backed by **native OS webviews** on every platform.
 
-- Desktop: **Wry** backend (Rust core via **Gobley/UniFFI**)
-- Android: `android.webkit.WebView`
-- iOS: `WKWebView`
+```text
+io.github.kdroidfilter.webview.*
+```
 
-## Demo
+✅ Android: `android.webkit.WebView`
+✅ iOS: `WKWebView`
+✅ Desktop: **Wry (Rust)** via **UniFFI** → WebView2 / WKWebView / WebKitGTK
 
-This repo ships a feature showcase app (recommended first):
+---
 
-- Desktop (Wry): `./gradlew :demo:run`
-- Android: `./gradlew :demo-android:installDebug` (or `:demo-android:assembleDebug`)
-- iOS: open `iosApp/iosApp.xcodeproj` in Xcode and Run (it calls `./gradlew :demo-shared:embedAndSignAppleFrameworkForXcode`)
+## Why ComposeNativeWebView? ⚡
 
-The demo UI is responsive: on large screens it shows a side “Tools” panel, and on phones it uses a bottom sheet.
+### Native engines. No bundled Chromium.
 
-## Features
+Unlike KCEF-based solutions, **Desktop uses the OS webview**:
 
-- **Content loading**
-  - Load URL: `navigator.loadUrl(url, additionalHttpHeaders)`
-  - Load inline HTML: `navigator.loadHtml(html)`
-  - Load HTML from resources: `navigator.loadHtmlFile(fileName, readType)`
-- **Navigation**
-  - `navigateBack()`, `navigateForward()`, `reload()`, `stopLoading()`
-  - `canGoBack`, `canGoForward`
-- **Observable state**
-  - `state.isLoading`, `state.loadingState`, `state.lastLoadedUrl`, `state.pageTitle`
-- **Request interception (app-driven navigations)**
-  - `RequestInterceptor`: allow / reject / rewrite navigator-initiated loads
-- **Cookies**
-  - `state.cookieManager.setCookie/getCookies/removeCookies/removeAllCookies`
-- **JavaScript**
-  - `navigator.evaluateJavaScript(script)` *(fire-and-forget; no return value)*
-  - JS ↔ Kotlin **bridge**: `window.kmpJsBridge.callNative(...)` with callbacks
-- **Settings**
-  - `customUserAgentString` (**implemented**; desktop recreates, Android/iOS update in-place)
-  - `logSeverity` (internal logging)
+* **Windows**: WebView2
+* **macOS**: WKWebView
+* **Linux**: WebKitGTK
 
-## Limitations (current)
+👉 Smaller binaries, faster startup, system-level rendering.
 
-- Desktop + Android demos build from Gradle; iOS requires **macOS + Xcode toolchain** (Kotlin/Native + cinterop).
-- `RequestInterceptor` only applies to **navigations triggered via `WebViewNavigator`** (not to sub-resources like images/XHR loaded by the page).
-- On desktop, changing `customUserAgentString` **recreates** the WebView (debounced ~400ms): expect JS context/history loss.
+---
 
-## Project layout
+### Tiny desktop footprint 📦
 
-- `wrywebview/`: Rust core (wry) + UniFFI exports + JVM glue (`WryWebViewPanel`).
-- `wrywebview-compose/`: Compose API layer (`io.github.kdroidfilter.webview.*`).
-- `demo-shared/`: shared demo UI (`App()`), used by all demo targets.
-- `demo/`: Compose Desktop demo wrapper.
-- `demo-android/`: Android demo app wrapper.
-- `iosApp/`: iOS SwiftUI demo app wrapper (imports the `demoShared` framework).
+Desktop ships only:
 
-## Requirements
+* a **minimal JVM bridge**
+* **native bindings** (UniFFI + Rust)
 
-- Rust toolchain (`rustup` installed) for building the native core.
-- Android SDK for building the Android target.
-- macOS + Xcode for building iOS targets.
-- Platform deps for the underlying webview (notably on Linux: GTK/WebKitGTK packages depending on your distro).
-- JVM flag (required for JNA native access):
-  - `--enable-native-access=ALL-UNNAMED`
+No embedded browser runtime.
 
-## Using in a Compose Desktop app
+---
 
-### 1) Add dependency
+### Familiar Compose WebView API 🧩
+
+Same mental model as `compose-webview-multiplatform`:
+
+* `WebViewState`
+* `WebViewNavigator`
+* observable loading state
+* cookies
+* JS ↔ Kotlin bridge
+* request interception for app-driven navigation
+
+---
+
+## Quick start 🚀
 
 ```kotlin
-dependencies {
-  implementation("io.github.kdroidfilter:composewebview:<version>")
+@Composable
+fun App() {
+  val state = rememberWebViewState("https://example.com")
+  WebView(state, Modifier.fillMaxSize())
 }
 ```
 
-### 2) Enable native access
+That’s it.
+
+---
+
+## Installation 🧩
+
+### Dependency (all platforms)
+
+```kotlin
+dependencies {
+  implementation("io.github.kdroidfilter:composenativewebview:<version>")
+}
+```
+
+Same artifact for **Android, iOS, Desktop**.
+
+---
+
+### Desktop only: enable native access ⚠️
+
+Wry uses native access via JNA.
 
 ```kotlin
 compose.desktop {
@@ -82,336 +91,204 @@ compose.desktop {
 }
 ```
 
-### 3) Minimal WebView
+---
+
+## Demo app 🎮
+
+Run the feature showcase first:
+
+* **Desktop**: `./gradlew :demo:run`
+* **Android**: `./gradlew :demo-android:installDebug`
+* **iOS**: open `iosApp/iosApp.xcodeproj` in Xcode and Run
+
+Responsive UI:
+
+* large screens → side **Tools** panel
+* phones → **bottom sheet**
+
+---
+
+## Core features ✨
+
+### Content loading
+
+* `loadUrl(url, headers)`
+* `loadHtml(html)`
+* `loadHtmlFile(fileName, readType)`
+
+---
+
+### Navigation
+
+* `navigateBack()`, `navigateForward()`
+* `reload()`, `stopLoading()`
+* `canGoBack`, `canGoForward`
+
+---
+
+### Observable state
+
+* `isLoading`
+* `loadingState`
+* `lastLoadedUrl`
+* `pageTitle`
+
+---
+
+### Cookies 🍪
+
+Unified cookie API:
 
 ```kotlin
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import io.github.kdroidfilter.webview.web.WebView
-import io.github.kdroidfilter.webview.web.rememberWebViewState
-
-@Composable
-fun App() {
-  val state = rememberWebViewState("https://example.com")
-  WebView(state = state, modifier = Modifier.fillMaxSize())
-}
+state.cookieManager.setCookie(...)
+state.cookieManager.getCookies(url)
+state.cookieManager.removeCookies(url)
+state.cookieManager.removeAllCookies()
 ```
 
-## API guide
-
-### WebViewState
-
-Create a state and (optionally) configure settings:
-
-```kotlin
-import io.github.kdroidfilter.webview.web.rememberWebViewState
-
-val state = rememberWebViewState(
-  url = "https://httpbin.org/html",
-  additionalHttpHeaders = mapOf("X-Demo" to "ComposeWebView"),
-) {
-  customUserAgentString = "ComposeWebView/1.0 (Desktop)"
-}
-```
-
-Useful properties:
-
-- `state.isLoading` / `state.loadingState` (`Initializing`, `Loading(progress)`, `Finished`)
-- `state.lastLoadedUrl`
-- `state.pageTitle`
-- `state.cookieManager`
-- `state.webSettings`
-
-Other constructors:
-
-```kotlin
-import io.github.kdroidfilter.webview.web.WebViewFileReadType
-import io.github.kdroidfilter.webview.web.rememberWebViewStateWithHTMLData
-import io.github.kdroidfilter.webview.web.rememberWebViewStateWithHTMLFile
-
-val dataState = rememberWebViewStateWithHTMLData("<html>...</html>")
-val fileState = rememberWebViewStateWithHTMLFile("my_page.html", WebViewFileReadType.ASSET_RESOURCES)
-```
-
-You can also drive loading via `state.content` (state-driven workflows):
-
-```kotlin
-import io.github.kdroidfilter.webview.web.WebContent
-
-state.content = WebContent.Url("https://example.com")
-// or: state.content = WebContent.Data("<html>...</html>")
-```
-
-### WebViewNavigator
-
-```kotlin
-import io.github.kdroidfilter.webview.web.rememberWebViewNavigator
-
-val navigator = rememberWebViewNavigator()
-```
-
-Main commands:
-
-- `loadUrl(url, additionalHttpHeaders)`
-- `loadHtml(html, baseUrl, mimeType, encoding, historyUrl)`
-- `loadHtmlFile(fileName, readType)`
-- `navigateBack()` / `navigateForward()`
-- `reload()` / `stopLoading()`
-- `evaluateJavaScript(script)`
-
-State:
-
-- `navigator.canGoBack` / `navigator.canGoForward`
-
-Attach it:
-
-```kotlin
-WebView(state = state, navigator = navigator)
-```
-
-### Loading content
-
-#### URL + HTTP headers
-
-```kotlin
-navigator.loadUrl(
-  "https://httpbin.org/headers",
-  additionalHttpHeaders = mapOf("X-From" to "ComposeWebView"),
-)
-```
-
-#### Inline HTML
-
-```kotlin
-navigator.loadHtml("<html><body><h1>Hello</h1></body></html>")
-```
-
-#### HTML file from resources (assets)
-
-Recommended (cross-platform): put your HTML under Compose Multiplatform resources and load it with `WebViewFileReadType.ASSET_RESOURCES`.
-
-- Put your file here: `src/commonMain/composeResources/files/my_page.html`
-- Load it:
-
-```kotlin
-import io.github.kdroidfilter.webview.web.WebViewFileReadType
-
-navigator.loadHtmlFile("my_page.html", WebViewFileReadType.ASSET_RESOURCES)
-```
-
-The demo includes `demo-shared/src/commonMain/composeResources/files/bridge_playground.html` (JS bridge playground).
-
-### RequestInterceptor (pre-navigation)
-
-Intercept navigator-initiated navigations (allow/reject/modify):
-
-```kotlin
-import io.github.kdroidfilter.webview.request.RequestInterceptor
-import io.github.kdroidfilter.webview.request.WebRequest
-import io.github.kdroidfilter.webview.request.WebRequestInterceptResult
-import io.github.kdroidfilter.webview.web.WebViewNavigator
-import io.github.kdroidfilter.webview.web.rememberWebViewNavigator
-
-val interceptor = object : RequestInterceptor {
-  override fun onInterceptUrlRequest(request: WebRequest, navigator: WebViewNavigator): WebRequestInterceptResult {
-    if (request.url.contains("blocked")) return WebRequestInterceptResult.Reject
-    return WebRequestInterceptResult.Allow
-  }
-}
-
-val navigator = rememberWebViewNavigator(requestInterceptor = interceptor)
-```
-
-Notes:
-
-- This is evaluated **before** calling the native backend.
-- It does not intercept sub-resources (images/XHR/etc.).
-
-### Cookies
-
-Cookies are exposed via `state.cookieManager` (suspend API):
-
-```kotlin
-import androidx.compose.runtime.rememberCoroutineScope
-import io.github.kdroidfilter.webview.cookie.Cookie
-import kotlinx.coroutines.launch
-
-val scope = rememberCoroutineScope()
-
-val cookie = Cookie(
-  name = "demo",
-  value = "123",
-  domain = "httpbin.org",
-  path = "/",
-  isSessionOnly = true,
-  sameSite = Cookie.HTTPCookieSameSitePolicy.LAX,
-  isSecure = true,
-)
-
-scope.launch {
-  state.cookieManager.setCookie("https://httpbin.org", cookie)
-  val cookies = state.cookieManager.getCookies("https://httpbin.org")
-  state.cookieManager.removeCookies("https://httpbin.org")
-  state.cookieManager.removeAllCookies()
-}
-```
+---
 
 ### JavaScript
 
-#### evaluateJavaScript
-
 ```kotlin
-navigator.evaluateJavaScript("document.title = 'Hello from Kotlin'")
+navigator.evaluateJavaScript("document.title = 'Hello'")
 ```
 
-On the Wry desktop backend this is currently **fire-and-forget** (no return value).
+Desktop is currently **fire-and-forget**.
 
-#### JS Bridge (JS ↔ Kotlin)
+---
 
-1) Create/inject the bridge:
+### JS ↔ Kotlin bridge 🌉
 
-```kotlin
-import io.github.kdroidfilter.webview.jsbridge.rememberWebViewJsBridge
-
-val jsBridge = rememberWebViewJsBridge(navigator)
-
-WebView(
-  state = state,
-  navigator = navigator,
-  webViewJsBridge = jsBridge,
-)
-```
-
-2) Register a Kotlin handler:
-
-```kotlin
-import androidx.compose.runtime.DisposableEffect
-import io.github.kdroidfilter.webview.jsbridge.IJsMessageHandler
-import io.github.kdroidfilter.webview.jsbridge.JsMessage
-import io.github.kdroidfilter.webview.web.WebViewNavigator
-
-val echoHandler = object : IJsMessageHandler {
-  override fun methodName() = "echo"
-  override fun handle(message: JsMessage, navigator: WebViewNavigator?, callback: (String) -> Unit) {
-    callback("echo=" + message.params) // callback receives a String on JS side
-  }
-}
-
-DisposableEffect(Unit) {
-  jsBridge.register(echoHandler)
-  onDispose { jsBridge.unregister(echoHandler) }
-}
-```
-
-3) Call it from JavaScript:
+* injected automatically after page load
+* callback-based
+* works on all platforms
 
 ```js
-window.kmpJsBridge.callNative(
-  "echo",
-  { text: "Hello" },
-  function (data) {
-    console.log("callback=", data); // string
-  }
-);
+window.kmpJsBridge.callNative("echo", {...}, callback)
 ```
 
-Notes:
+---
 
-- The bridge is injected after loading completes (`LoadingState.Finished`).
-- The desktop backend routes messages via Wry IPC (`window.ipc.postMessage`).
-- Callbacks receive a **string**. If you want to return JSON objects, return a JSON string and do `JSON.parse(data)` in JS.
+### RequestInterceptor 🚦
 
-## Settings
+Intercept **navigator-initiated** navigations only:
+
+```kotlin
+override fun onInterceptUrlRequest(
+  request: WebRequest,
+  navigator: WebViewNavigator
+): WebRequestInterceptResult
+```
+
+Useful for:
+
+* blocking URLs
+* app-driven routing
+* security rules
+
+---
+
+## WebViewState & Navigator 📘
+
+### State creation
+
+```kotlin
+val state = rememberWebViewState(
+  url = "https://example.com"
+) {
+  customUserAgentString = "MyApp/1.0"
+}
+```
+
+Supports:
+
+* URL
+* inline HTML
+* resource files
+
+---
+
+### Navigator
+
+```kotlin
+val navigator = rememberWebViewNavigator()
+WebView(state, navigator)
+```
+
+Commands:
+
+* `loadUrl`
+* `loadHtml`
+* `loadHtmlFile`
+* `evaluateJavaScript`
+
+---
+
+## Settings ⚙️
 
 ### Custom User-Agent
 
 ```kotlin
-state.webSettings.customUserAgentString = "MyApp/1.2.3 (ComposeWebView)"
+state.webSettings.customUserAgentString = "MyApp/1.2.3"
 ```
 
-Wry applies user-agent at creation time, so changing this value **recreates** the WebView (debounced ~400ms).
+Desktop note:
 
-Tip: set it early (e.g. inside the `extraSettings` lambda of `rememberWebViewState`) to avoid recreating after the UI is shown.
+* applied at creation time
+* changing it **recreates** the WebView (debounced)
+* JS context/history may be lost
 
-### Log severity
+👉 Set it early.
+
+---
+
+### Logging
 
 ```kotlin
-import io.github.kdroidfilter.webview.util.KLogSeverity
 state.webSettings.logSeverity = KLogSeverity.Debug
 ```
 
-## Advanced
+---
 
-### Access the native WebView (desktop)
+## Desktop advanced 🖥️
 
-The desktop `NativeWebView` is a `WryWebViewPanel`. You can get it via the overload:
+### Access native WebView handle
 
 ```kotlin
-import io.github.kdroidfilter.webview.web.NativeWebView
-
 WebView(
-  state = state,
-  navigator = navigator,
-  onCreated = { native: NativeWebView ->
-    println("native ready, url=" + native.getCurrentUrl())
+  state,
+  navigator,
+  onCreated = { native ->
+    println(native.getCurrentUrl())
   }
 )
 ```
 
-Kotlin note: there are two `WebView(...)` overloads. If you pass `onCreated = { println("...") }` with no parameter, the call may become ambiguous. Prefer `onCreated = { _ -> ... }` or a typed lambda (`native: NativeWebView -> ...`).
+Useful for debugging or platform-specific hooks.
 
-### Custom factory (native creation)
+---
 
-You can override how the native webview is created:
+## Project structure 🗂️
 
-```kotlin
-import io.github.kdroidfilter.webview.web.NativeWebView
-import io.github.kdroidfilter.webview.web.WebViewFactoryParam
+* `wrywebview/` → Rust core + UniFFI bindings
+* `wrywebview-compose/` → Compose API
+* `demo-shared/` → shared demo UI
+* `demo/`, `demo-android/`, `iosApp/` → platform launchers
 
-WebView(
-  state = state,
-  navigator = navigator,
-  factory = { param: WebViewFactoryParam ->
-    // WryWebViewPanel(initialUrl, customUserAgent)
-    NativeWebView("about:blank", param.userAgent)
-  }
-)
-```
+---
 
-If you override the factory, make sure to respect `param.userAgent` if you want user-agent support to keep working.
+## Limitations ⚠️
 
-## Development
+* RequestInterceptor does **not** intercept sub-resources
+* Desktop UA change recreates the WebView
 
-- Full build (Kotlin + Rust + generated bindings):
+---
 
-```bash
-./gradlew build
-```
 
-- Rebuild the native core + refresh generated UniFFI bindings:
+## Credits 🙏
 
-```bash
-./gradlew :wrywebview:build
-```
+* API inspiration: KevinnZou/compose-webview-multiplatform
+* Wry (Tauri ecosystem)
+* UniFFI (Mozilla)
 
-## Architecture (high level)
-
-```
-Compose UI
-  └─ SwingPanel
-      └─ WryWebViewPanel (JVM)
-          └─ UniFFI bindings
-              └─ Rust (wry)
-                  └─ WebView platform (WebKitGTK / WKWebView / WebView2)
-```
-
-## Troubleshooting
-
-- **Blank area / nothing renders**
-  - Make sure you run with `--enable-native-access=ALL-UNNAMED`
-  - On Linux, ensure the required GTK/WebKitGTK packages are installed
-  - Run `./gradlew :demo:run` and inspect stdout/stderr (native errors often end up there)
-- **JS bridge does not respond**
-  - Wait for `LoadingState.Finished` (the bridge is injected after load)
-  - Test with the demo page `bridge_playground.html`
