@@ -138,6 +138,21 @@ jobs:
           name: native-windows-x86_64
           path: wrywebview/target/x86_64-pc-windows-msvc/release/
 
+      - name: Prepare JVM native resources
+        run: |
+          mkdir -p wrywebview/src/jvmMain/resources/darwin-aarch64
+          mkdir -p wrywebview/src/jvmMain/resources/darwin-x86-64
+          mkdir -p wrywebview/src/jvmMain/resources/linux-x86-64
+          mkdir -p wrywebview/src/jvmMain/resources/win32-x86-64
+          cp wrywebview/target/aarch64-apple-darwin/release/libcomposewebview_wry.dylib \
+            wrywebview/src/jvmMain/resources/darwin-aarch64/
+          cp wrywebview/target/x86_64-apple-darwin/release/libcomposewebview_wry.dylib \
+            wrywebview/src/jvmMain/resources/darwin-x86-64/
+          cp wrywebview/target/x86_64-unknown-linux-gnu/release/libcomposewebview_wry.so \
+            wrywebview/src/jvmMain/resources/linux-x86-64/
+          cp wrywebview/target/x86_64-pc-windows-msvc/release/composewebview_wry.dll \
+            wrywebview/src/jvmMain/resources/win32-x86-64/
+
       - name: Verify native libraries
         run: |
           echo "=== Native libraries downloaded ==="
@@ -145,6 +160,11 @@ jobs:
           ls -la wrywebview/target/x86_64-apple-darwin/release/
           ls -la wrywebview/target/x86_64-unknown-linux-gnu/release/
           ls -la wrywebview/target/x86_64-pc-windows-msvc/release/
+          echo "=== Native libraries in resources ==="
+          ls -la wrywebview/src/jvmMain/resources/darwin-aarch64/
+          ls -la wrywebview/src/jvmMain/resources/darwin-x86-64/
+          ls -la wrywebview/src/jvmMain/resources/linux-x86-64/
+          ls -la wrywebview/src/jvmMain/resources/win32-x86-64/
 
       - name: Set up JDK
         uses: actions/setup-java@v4
