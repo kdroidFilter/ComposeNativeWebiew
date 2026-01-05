@@ -3,7 +3,14 @@ import com.vanniktech.maven.publish.JavadocJar
 import gobley.gradle.GobleyHost
 import gobley.gradle.Variant
 import gobley.gradle.cargo.dsl.jvm
+import gobley.gradle.cargo.tasks.CargoBuildTask
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+fun rustLibraryName(triple: String): String = when {
+    triple.contains("windows") -> "composewebview_wry.dll"
+    triple.contains("darwin") || triple.contains("apple") -> "libcomposewebview_wry.dylib"
+    else -> "libcomposewebview_wry.so"
+}
 
 plugins {
     alias(libs.plugins.kotlinJvm)
@@ -20,11 +27,7 @@ cargo {
         // In CI with pre-built natives, embed if the library file exists
         // Otherwise, only embed for current host platform
         val triple = rustTarget.rustTriple
-        val libName = when {
-            triple.contains("windows") -> "composewebview_wry.dll"
-            triple.contains("darwin") || triple.contains("apple") -> "libcomposewebview_wry.dylib"
-            else -> "libcomposewebview_wry.so"
-        }
+        val libName = rustLibraryName(triple)
         val prebuiltLib = layout.projectDirectory.dir("target/$triple/release").file(libName)
         embedRustLibrary = prebuiltLib.asFile.exists() || (GobleyHost.current.rustTarget == rustTarget)
     }
@@ -43,7 +46,9 @@ rust {
 }
 
 uniffi {
-    generateFromLibrary()
+    generateFromLibrary {
+        build.set(GobleyHost.current.rustTarget)
+    }
 }
 
 kotlin {
@@ -58,6 +63,20 @@ dependencies {
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
+tasks.withType<CargoBuildTask>().configureEach {
+    onlyIf {
+        val rustTarget = target.orNull ?: return@onlyIf true
+        val triple = rustTarget.rustTriple
+        val libName = rustLibraryName(triple)
+        val prebuiltLib = project.layout.projectDirectory
+            .dir("target/$triple/release")
+            .file(libName)
+            .asFile
+        val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
+        !prebuiltLib.exists() || isHostTarget
     }
 }
 
