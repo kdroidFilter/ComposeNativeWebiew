@@ -62,7 +62,7 @@ That’s it.
 
 ```kotlin
 dependencies {
-  implementation("io.github.kdroidfilter:composenativewebview:<version>")
+  implementation("io.github.kdroidfilter:composewebview:<version>")
 }
 ```
 
