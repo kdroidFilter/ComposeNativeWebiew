@@ -4,13 +4,20 @@ import gobley.gradle.GobleyHost
 import gobley.gradle.Variant
 import gobley.gradle.cargo.dsl.jvm
 import gobley.gradle.cargo.tasks.CargoBuildTask
+import gobley.gradle.cargo.tasks.FindDynamicLibrariesTask
+import gobley.gradle.cargo.tasks.RustUpTargetAddTask
+import org.gradle.api.Project
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.io.File
 
 fun rustLibraryName(triple: String): String = when {
     triple.contains("windows") -> "composewebview_wry.dll"
     triple.contains("darwin") || triple.contains("apple") -> "libcomposewebview_wry.dylib"
     else -> "libcomposewebview_wry.so"
 }
+
+fun Project.prebuiltRustLibrary(triple: String): File =
+    layout.projectDirectory.dir("target/$triple/release").file(rustLibraryName(triple)).asFile
 
 plugins {
     alias(libs.plugins.kotlinJvm)
@@ -70,11 +77,27 @@ tasks.withType<CargoBuildTask>().configureEach {
     onlyIf {
         val rustTarget = target.orNull ?: return@onlyIf true
         val triple = rustTarget.rustTriple
-        val libName = rustLibraryName(triple)
-        val prebuiltLib = project.layout.projectDirectory
-            .dir("target/$triple/release")
-            .file(libName)
-            .asFile
+        val prebuiltLib = project.prebuiltRustLibrary(triple)
+        val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
+        !prebuiltLib.exists() || isHostTarget
+    }
+}
+
+tasks.withType<FindDynamicLibrariesTask>().configureEach {
+    val rustTarget = rustTarget.orNull ?: return@configureEach
+    val triple = rustTarget.rustTriple
+    val prebuiltLib = project.prebuiltRustLibrary(triple)
+    val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
+    if (prebuiltLib.exists() && !isHostTarget) {
+        searchPaths.set(listOf(prebuiltLib.parentFile))
+    }
+}
+
+tasks.withType<RustUpTargetAddTask>().configureEach {
+    onlyIf {
+        val rustTarget = rustTarget.orNull ?: return@onlyIf true
+        val triple = rustTarget.rustTriple
+        val prebuiltLib = project.prebuiltRustLibrary(triple)
         val isHostTarget = GobleyHost.current.rustTarget.rustTriple == triple
         !prebuiltLib.exists() || isHostTarget
     }
