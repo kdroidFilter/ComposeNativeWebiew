@@ -1,18 +1,46 @@
 # ComposeNativeWebView 🌐
 
-**A lightweight Compose Multiplatform WebView** with a
-**KevinnZou/compose-webview-multiplatform-inspired API**, backed by **native OS webviews** on every platform.
+**ComposeNativeWebView** is a **Compose Multiplatform WebView** whose **API design and mobile implementations (Android & iOS) are intentionally derived almost verbatim from
+[KevinnZou/compose-webview-multiplatform](https://github.com/KevinnZou/compose-webview-multiplatform)**.
+
+This project exists **first and foremost to bring that same API to Desktop**, backed by **native OS webviews instead of a bundled Chromium runtime**.
 
 ```text
 io.github.kdroidfilter.webview.*
 ```
 
-✅ Android: `android.webkit.WebView`
-✅ iOS: `WKWebView`
-✅ Desktop: **Wry (Rust)** via **UniFFI** → WebView2 / WKWebView / WebKitGTK
+### What is reused vs what is new
+
+🟢 **Reused on purpose**
+
+* API surface (`WebViewState`, `WebViewNavigator`, settings, callbacks, mental model)
+* Android implementation (`android.webkit.WebView`)
+* iOS implementation (`WKWebView`)
+* Overall behavior and semantics
+
+👉 If you already know **compose-webview-multiplatform**, you already know how to use this.
+
+🆕 **What ComposeNativeWebView adds**
+
+* **Desktop support with native engines**
+* A **Rust + UniFFI (Wry)** backend instead of KCEF / embedded Chromium
+* A **tiny desktop footprint** with system-provided webviews
 
 ---
 
+## Platform backends
+
+✅ **Android**: `android.webkit.WebView`
+✅ **iOS**: `WKWebView`
+✅ **Desktop**: **Wry (Rust)** via **UniFFI**
+
+Desktop engines:
+
+* **Windows**: WebView2
+* **macOS**: WKWebView
+* **Linux**: WebKitGTK
+
+---
 ## Why ComposeNativeWebView? ⚡
 
 ### Native engines. No bundled Chromium.
